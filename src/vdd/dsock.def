@@ -1,0 +1,7 @@
+LIBRARY dsock
+
+EXPORTS
+    DSock_Init
+    DSock_Dispatch
+    DSock_Terminate
+    w32_init

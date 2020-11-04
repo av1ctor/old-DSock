@@ -1,0 +1,140 @@
+.............................................................................
+Win9x/Me mode:                                    
+                                           
+        [call]        [vxd rm api]    [fake deviceIo]
+          V                V                |
+dos app <====> DSock.lib <====> wsock2.vxd  V
+      ^        |       ^ `====> DSock.vxd <====> wsock2.vxd ---.
+      |        |       |        |       ^ `====> winsock.dll   |-> [WndProc]
+      |        |       |        |       | `====> DSock.dll <---'
+      |        |       |        |       |    ^---|--.
+      `--------'       `--------'       `--------'  '-- _SHELL_PostMessage
+          ^                 ^                ^   
+     [ds/ss+call]  [simulate far call]  [DeviceIoControl]
+
+...
+components:
+ 
+ DSock.lib (16-bit static lib):
+ 	- loads the VxDs and processes errors;
+    - wrappers around wsock2 and DSock VxDs calls;
+ 	- receives the simulate far call and setup DS and SS:SP before 
+ 	  calling the user handler (in QB: SetUEvent);
+		     
+ DSock.dll (32-bit dynamic lib):
+ 	- is loaded by rundll32 (as vxd's can't load 32-bit dll and as
+ 	  it needs its own process to run);
+ 	- checks if running in win9x or nt and selects the correct interface;
+ 	- it registers a class and creates a non-visible window;
+    - processes messages (passing any related to wsock to DSock.vxd);
+ 	- unregisters the class when to shutdown;
+
+ DSock.vxd:
+ 	- fixes the bugs in wsock2.vxd recv/send services calling wsock2
+ 	  directly (faking a DeviceIoControl call);
+    - loads DSock.dll for be able to work with non-blocking (AsyncSelect)
+ 	  wsock2 operations (using rundll32.exe);
+    - when invoked by DSock.dll, wakes up the DosVM and calls the 
+      callback routine passing the parameters DSock.dll passes;
+ 	- loads winsock.dll and calls its routines when some service not 
+ 	  supported by wsock2.vxd is needed (ie: dns services);
+
+...
+ questions (for implementing asynchronous sockets):
+	# 1st idea: using the dos box WndProc to receive wsock2.vxd msgs
+	  and hooking it (using User::SetWindowHookEx). problems: 	  
+ 	  ? creating the hooking proc in the VxD (in a 16-bit code seg) 
+ 	    will work? (at min, ring-3 selectors will be needed);
+ 	  ! the process of the dos box must be the same of the hooking 
+ 	    proc or SetWindowHookEx will fail (then a DLL will be needed, 
+            thus, making this solution no better than using DSock.dll);
+          ? how does SetWindowHook(Ex) work in user16?
+	
+ 	# 2nd idea: using the ApcRoutine field from wsock2's params structs.
+	  problems:
+	  - it's only for pmode user-mode (ring-3) routines, being 16- or 32-bit;
+            ? could making the apc in the vxd body work?
+              = LE can support 16-bit segs and 16-bit, ring-3 selectors can
+                be created, but, won't wsock/tdi use a call-gate and then
+                won't it change the page-maps?
+	
+    # 3rd idea: creating threads in DSock.vxd and then doing a blocking 
+	  (sync) calls to wsock2 (thus, only the thread calling it will 
+	  be blocked, not the whole DosVM). problems:
+	  ? has it to be a ring-3 (VMM primary scheduler) or a ring-0 
+	    (_VWIN32) thread? problems:
+	    - pri scheduler threads creation/deletion is according with
+	      ddk docs, only to be used by Windows's system components!
+	    - most _VWIN32 thread services will only work when called in the
+	      context of SysVM;
+	  ! all calls to wsock2.vxd will have to be done through the fake
+	    DeviceIoCall (not a big deal)
+
+        # 4th: when using the DSock 16-bit dll:
+          ? won't the GetMessage in DSock.dll block the DosVM?
+            ! Win16 apps run in the same process as dos ones: WOLDAPP! 
+	    - can't create threads as the WOLDAPP (DOS VM) process can have only 
+              one thread.
+	  	  
+	# 5th: back using the dumb win32 slave:
+	  ! can use _SHELL_ShellExecute to load/execute it;
+	  ? problems with syncronization: how to know if the slave did load
+	    correctly, w/out blocking the system?
+	  + GetMessage will block only the process and leave the dos VM running;
+      ? could we use the same DSock vdd (a 32-bit dll) as the win slave 
+            (detecting when initializing it, if running in nt or 9x)?
+            ! using rundll32.exe, the dll will be mapped to its process;
+            - can't let win9x loader fix up the imports from ntvdm.exe as it
+              (of course) doesn't exist in win9x/Me;
+              ! must do all at run-time, using function pointers;
+	  
+
+.............................................................................
+WinNT/2K/XP mode:
+
+        [call]        [VDD dispatch]      [call]
+          V                V                V
+dos app <====> DSock.lib <====> DSock.dll <====> winsock api =/=> kernel-mode
+      ^        |       ^        |       ^        |
+      |        |       |        |       |        |
+      `--------'       `--------'       `--------'
+          ^                ^                 ^   
+     [ds/ss+call]   [VDDSimulate16]      [WndProc]
+
+ obs: the VDDSimulate16 is synchronous, the VDD is blocked until
+      VDDUnSimulate16 is called by DSock.lib
+
+...
+components:
+ 
+ DSock.lib (16-bit static lib):
+ 	- loads the VDDs and processes errors;
+    - wrappers around DSock.vdd calls;
+ 	- receives the VDDSimulate16, setup DS and SS:SP, calls
+ 	  user handler (in QB: SetUEvent), invokes VDDUnSimulate16;
+
+ DSock.dll (32-bit user-mode dll):
+ 	- checks if running in win9x or nt and selects the correct interface;
+ 	- calls winsock api to do the work;
+ 	- checks when VDM is being stopped/paused/resumed;
+ 	- it registers a class and creates a non-visible window;
+    - processes msgs calling DSock.lib callback when receiving 
+ 	  any msg related to winsock;
+ 	  ^--!!!!! won't GetMessage block the VDM???? !!!!!
+ 	- calls the VDM callback when WinProc is called by winsock;
+ 	- unregisters the class when to shutdown;
+
+...
+ questions (for implementing asynchronous sockets):
+        ? won't GetMessage looping in the vdd block the VDM?
+	  ! create a 32-bit thread and then GetMessage will only block it
+
+
+.............................................................................
+ * when not using WSAAsyncSelect with some socket, connect/recv/send/... 
+    calls will block the VM/VDM until winsock finishes, making
+   it useless for games or any dos app that need to update/process input 
+   while connecting/recving/sending.
+
+ * when using WSAAsyncSelect, the callback will be called when winsock
+   call the WinProc of DSock.dll

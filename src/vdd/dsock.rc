@@ -1,0 +1,12 @@
+#include "version.h"
+
+#define VER_FILETYPE                    VFT_DLL
+#define VER_FILESUBTYPE                 VFT2_UNKNOWN
+#define VER_FILEDESCRIPTION_STR         "DSock VDD v0.5"
+#define VER_INTERNALNAME_STR            "DSock"
+#define VER_ORIGINALFILENAME_STR        "dsock.dll"
+#define VER_LEGALCOPYRIGHT_STR      	"v1ctor (av1ctor@yahoo.com.br)"
+#define VER_COMPANYNAME_STR         	"v-one software"
+#define VER_PRODUCTNAME_STR             "DSock"
+
+#include "common.ver"
